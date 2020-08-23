@@ -1,0 +1,188 @@
+# available keyboard layouts
+ls /usr/share/kbd/keymaps/**/*.map.gz
+
+# set the keyboard layout
+loadkeys br-abnt2
+
+# iwctl to connect to a wifi
+iwctl
+
+# update package repository index
+pacman -Syyy
+
+# [optional] edit the mirror list to put one that is on the same country I am
+vim /etc/pacman.d/mirrorlist
+
+# securely erase the disk
+dd if=/dev/urandom of=/dev/sda bs=4096 status=progress
+
+
+# partition the table
+# (obs
+# in this installation just +50M for boot partition /dev/sda2 were not enough, so it was changed to +500M
+#)
+fdisk /dev/sda
+	g
+	/dev/sda1 EFI System (type alias 1) +500M
+	/dev/sda2 Linux FileSystem (type alias 20) +500M
+	/dev/sda3 Linux LVM (type alias 30) +100%FREE
+
+# format EFI partition
+mkfs.fat -F32 /dev/sda1
+
+# encrypt boot partition
+cryptsetup luksFormat /dev/sda2
+
+# open encrypted boot partition
+cryptsetup open --type luks /dev/sda2 cryptboot
+
+# format encrypted boot partition
+mkfs.ext4 /dev/mapper/cryptboot
+
+# encrypt LVM partition
+cryptsetup luksFormat /dev/sda3
+
+# open encrypted LVM partition
+cryptsetup open --type luks /dev/sda3 cryptlvm
+
+# create physical volume
+pvcreate  <optional for ssd --dataalignment 1m> /dev/mapper/cryptlvm
+
+# create volume group
+vgcreate volgroup0 /dev/mapper/cryptlvm
+
+# create logical volume (obs create a logical volume with less size than it is available on disk makes possible LVM snapshots, which are good to have when there's going to have a huge change on system, because in case of failures or unexpected behavior, it is possible to roll the system back before the change)
+lvcreate -L 50GB volgroup0 -n root
+<optional lvcreate -l 100%FREE volgroup0 root>
+
+# format root filesystem logical volume
+mkfs.ext4 /dev/volgroup0/root
+
+# mount root logical volume
+mount /dev/volgroup0/root /mnt
+
+# create directory to mount the encrypted boot partition
+mkdir /mnt/boot
+
+# mount the encrypted boot partition
+mount /dev/mapper/cryptboot /mnt/boot
+
+#create /etc directory
+mkdir /mnt/etc
+
+# generate fstab file (required for successful boot)
+genfstab -U -p /mnt >> /mnt/etc/fstab
+
+# sanity check on file
+cat /mnt/etc/fstab
+
+#install packages on file system
+#(obs
+#linux <defaultLinuxKernel> linux-lts <alternateLinuxKernel
+#	-makes possibly a selection at the start process of the computer in which you can set the alternate kernel, which is very useful if you run into a problem
+#
+#efibootmgt dosfstools os-prober mtools
+#	-packages to support grub
+#)
+pacstrap -i /mnt base base-devel linux linux-lts linux-headers linux-lts-headers networkmanager wpa_supplicant wireless_tools netctl openssh dialog lvm2 grub efibootmgr dosfstools os-prober mtools vim
+
+# change to archroot to access in progress installation to make additional changes
+arch-chroot /mnt
+
+# enable openssh NetworkManager by default (start automatically at boot time)
+systemctl enable sshd NetworkManager
+
+# edit the very specific file /etc/mkinitcpio.conf
+# line -- HOOKS=(base udev autodetect keyboard keymap consolefont modconf block lvm2 encrypt filesystems fsck)
+vim /etc/mkinitcpio.conf
+
+# run mkinitcpio -p against whatever kernel decided to go along with
+# <doubt does mkinitcpio -P (capital p) run the command against all available kernels?>
+mkinitcpio -p linux
+mkinitcpio -p linux-lts
+
+# set time zone
+ln -sf /usr/share/zoneinfo/Brazil/East /etc/localtime
+
+# generate /etc/adjtime
+hwclock --systohc
+
+# Localization - edit /etc/locale.gen uncommenting pt_BR.UTF-8 UTF-8
+vim /etc/locale.gen
+
+# generate the locale(s)
+locale-gen
+
+# set the LANG variable in a file named /etc/locale.conf
+echo "LANG=pt_BR.UTF-8" >> /etc/locale.conf
+
+# set the keyboard layout in a file named /etc/vconsole.font
+echo "KEYMAP=br-abnt2" >> /etc/vconsole.conf
+
+# verify sudo
+# (obs
+# if the command does not have a result as /usr/bin/sudo, run pacman -S sudo
+# )
+which sudo
+
+# configure bootloader (grub has the most compatibility, applications such as timeshift have an issue when not using grub)
+# (obs
+# uncomment line GRUB_ENABLE_CRYPTODISK=y
+# complete line : GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 cryptdevice=/dev/sda3:volgroup0:allow-discards quiet"
+vim /etc/default/grub
+
+# create file for EFI information (files that are required for booting the system)
+mkdir /boot/EFI
+
+# mount the EFI System partition
+mount /dev/sda1 /boot/EFI
+
+# install grub bootloader on the hard drive
+grub-install --target=x86_64-efi --bootloader-id=grub_uefi --recheck
+
+# create directory /boot/grub/locale
+mkdir /boot/grub/locale
+
+# copy file into directory
+cp /usr/share/locale/en\@quot/LC_MESSAGES/grub.mo /boot/grub/locale/en.mo
+
+# avoiding having to enter the passphrase twice
+
+
+# create a swap file
+# (obs
+# it's preferable to create a swap file instead of a swap partition because it is easier to change the size of swap just deleting and recreating the file with a bigger size whereas with a swap partition. With a swap partition it's needed to resize the partitions which is a lot more risky
+# )
+fallocate -l 4G /swapfile
+
+# adjust the swap file permissions to be more restrictive
+chmod 600 /swapfile
+
+# Make swap
+mkswap /swapfile
+
+# create a backup of fstab file
+cp /etc/fstab /etc/fstab.bak
+
+# Make swap activate as soon as computer is started adding to fstab file
+echo "/swapfile none swap sw 0 0" | tee -a /etc/fstab
+
+# sanity check on file
+cat /mnt/etc/fstab
+
+# install micro code package for the actual CPU (if AMD cpu - amd-ucode; elseif intel cpu - intel-ucode)
+pacman -S intel-ucode
+
+# package to facilitate a desktop environment
+pacman -S xorg-server
+
+# consider installing a video driver, if intel or AMD gpu - mesa; elseif NVIDIA gpu - nvidia nvidia-lts nvidia-utils
+pacman -S mesa
+
+# back to arch linux install media
+exit
+
+# umount -a
+
+# poweroff or reboot
+poweroff
