@@ -19,31 +19,20 @@ dd if=/dev/urandom of=/dev/sda bs=4096 status=progress
 
 # partition the table
 # (obs
-# in this installation just +50M for boot partition /dev/sda2 were not enough, so it was changed to +500M
-#)
+# in this installation it will not be necessary a separate boot partition, because the directory /boot will be kept encrypted inside root)
 fdisk /dev/sda
 	g
 	/dev/sda1 EFI System (type alias 1) +500M
-	/dev/sda2 Linux FileSystem (type alias 20) +500M
-	/dev/sda3 Linux LVM (type alias 30) +100%FREE
+	/dev/sda2 Linux LVM (type alias 30) +100%FREE
 
 # format EFI partition
 mkfs.fat -F32 /dev/sda1
 
-# encrypt boot partition
-cryptsetup luksFormat /dev/sda2
-
-# open encrypted boot partition
-cryptsetup open --type luks /dev/sda2 cryptboot
-
-# format encrypted boot partition
-mkfs.ext4 /dev/mapper/cryptboot
-
 # encrypt LVM partition
-cryptsetup luksFormat /dev/sda3
+cryptsetup luksFormat --type luks1 /dev/sda2
 
 # open encrypted LVM partition
-cryptsetup open --type luks /dev/sda3 cryptlvm
+cryptsetup open --type luks1 /dev/sda2 cryptlvm
 
 # create physical volume
 pvcreate  <optional for ssd --dataalignment 1m> /dev/mapper/cryptlvm
@@ -61,11 +50,8 @@ mkfs.ext4 /dev/volgroup0/root
 # mount root logical volume
 mount /dev/volgroup0/root /mnt
 
-# create directory to mount the encrypted boot partition
+# create directory
 mkdir /mnt/boot
-
-# mount the encrypted boot partition
-mount /dev/mapper/cryptboot /mnt/boot
 
 #create /etc directory
 mkdir /mnt/etc
@@ -98,6 +84,7 @@ vim /etc/mkinitcpio.conf
 
 # run mkinitcpio -p against whatever kernel decided to go along with
 # <doubt does mkinitcpio -P (capital p) run the command against all available kernels?>
+#<Yes.>
 mkinitcpio -p linux
 mkinitcpio -p linux-lts
 
@@ -128,26 +115,53 @@ which sudo
 # configure bootloader (grub has the most compatibility, applications such as timeshift have an issue when not using grub)
 # (obs
 # uncomment line GRUB_ENABLE_CRYPTODISK=y
-# complete line : GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 cryptdevice=/dev/sda3:volgroup0:allow-discards quiet"
+# complete line : GRUB_CMDLINE_LINUX="cryptdevice=UUID=device-UUID:cryptlvm"
 vim /etc/default/grub
 
 # create file for EFI information (files that are required for booting the system)
-mkdir /boot/EFI
+mkdir /efi
 
 # mount the EFI System partition
-mount /dev/sda1 /boot/EFI
+mount /dev/sda1 /efi
 
 # install grub bootloader on the hard drive
-grub-install --target=x86_64-efi --bootloader-id=grub_uefi --recheck
+grub-install --target=x86_64-efi --efi=/efi --bootloader-id=GRUB --recheck
 
 # create directory /boot/grub/locale
 mkdir /boot/grub/locale
 
 # copy file into directory
-cp /usr/share/locale/en\@quot/LC_MESSAGES/grub.mo /boot/grub/locale/en.mo
+cp /usr/share/locale/en\@quot/LC_MESSAGES/grub.mo /boot/grub/locale/en.mo 
 
 # avoiding having to enter the passphrase twice
 
+# create a keyfile
+dd bs=512 count=4 if=/dev/urandom of=/root/cryptlvm.keyfile iflag=fullblock
+
+# change permissions
+chmod 000 /root/cryptlvm.keyfile
+
+# add keyfile as LUKS key
+cryptsetup -v luksAddKey /dev/sda2 /root/cryptlvm.keyfile
+
+# add the keyfile to the initramfs image
+# obs(edit line FILES=(/root/cryptlvm.keyfile))
+vim /etc/mkinitcpio.conf
+
+# recreate the initramfs image:
+mkinitcpio -P
+
+# secure the embedded keyfile
+chmod 600 /boot/initramfs-linux*
+
+# set the following kernel parameter to unlock the LUKS partition with the keyfile
+# obs(edit line GRUB_CMDLINE_LINUX="... cryptkey=rootfs:/root/cryptlvm.keyfile)
+vim /etc/default/grub
+
+# TODO - PROTECT /boot against offline tampering threats, research on mkinitcpio-chkcryptoboot hook
+
+# generate GRUB's configuration file
+grub-mkconfig -o /boot/grub/grub.cfg
 
 # create a swap file
 # (obs
@@ -168,7 +182,7 @@ cp /etc/fstab /etc/fstab.bak
 echo "/swapfile none swap sw 0 0" | tee -a /etc/fstab
 
 # sanity check on file
-cat /mnt/etc/fstab
+cat /etc/fstab
 
 # install micro code package for the actual CPU (if AMD cpu - amd-ucode; elseif intel cpu - intel-ucode)
 pacman -S intel-ucode
@@ -178,6 +192,9 @@ pacman -S xorg-server
 
 # consider installing a video driver, if intel or AMD gpu - mesa; elseif NVIDIA gpu - nvidia nvidia-lts nvidia-utils
 pacman -S mesa
+
+# set root password
+passwd
 
 # back to arch linux install media
 exit
