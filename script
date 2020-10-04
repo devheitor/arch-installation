@@ -70,7 +70,7 @@ cat /mnt/etc/fstab
 #efibootmgt dosfstools os-prober mtools
 #	-packages to support grub
 #)
-pacstrap -i /mnt base base-devel linux linux-lts linux-headers linux-lts-headers networkmanager wpa_supplicant wireless_tools netctl dhcp iw iwd openssh dialog lvm2 grub efibootmgr dosfstools os-prober mtools vim
+pacstrap -i /mnt base base-devel linux linux-lts linux-headers linux-lts-headers networkmanager wpa_supplicant wireless_tools netctl dhcpcd iw iwd openssh dialog lvm2 grub efibootmgr dosfstools os-prober mtools vim
 
 # change to archroot to access in progress installation to make additional changes
 arch-chroot /mnt
